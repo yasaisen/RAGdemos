@@ -1,6 +1,13 @@
 # tryRAG
 A small exploration of retrieval-augmented generation (RAG) in Python.
 
+## Repository Layout
+
+- `tryRAG/framework.py` – main class with indexing and generation logic.
+- `tryRAG/dataType.py` – dataclasses for document chunks and query objects.
+- `tryRAG/templates.py` – prompt templates used by the framework.
+- `demo.ipynb` – Jupyter notebook that demonstrates basic usage.
+
 ## Installation
 1. Create a Python environment (tested with Python 3.10):
    ```bash
@@ -25,8 +32,15 @@ A small exploration of retrieval-augmented generation (RAG) in Python.
 ```python
 from tryRAG.framework import RAGFramework
 
-rag = RAGFramework()
-rag.load_doc_from_path("docs.jsonl")
+cfg = {
+    "lm_model_name": "google/gemma-3-4b-it",
+    "emb_model_name": "all-MiniLM-L6-v2",
+    "doc_path": "path/to/data.jsonl", 
+    # "idx_path": "path/to/saved/dir",
+    "device": "cuda",
+}
+rag = RAGFramework.from_config(cfg)
+
 ```
 
 3. Ask a question:
@@ -38,13 +52,6 @@ print(response["response"])
 
 The framework retrieves the most relevant document chunks, builds a prompt, and
 uses a language model to produce an answer.
-
-## Repository Layout
-
-- `tryRAG/framework.py` – main class with indexing and generation logic.
-- `tryRAG/dataType.py` – dataclasses for document chunks and query objects.
-- `tryRAG/templates.py` – prompt templates used by the framework.
-- `demo.ipynb` – Jupyter notebook that demonstrates basic usage.
 
 ## License
 
