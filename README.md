@@ -35,6 +35,7 @@ from tryRAG.framework import RAGFramework
 cfg = {
     "lm_model_name": "google/gemma-3-4b-it",
     "emb_model_name": "all-MiniLM-L6-v2",
+    "mode": "dense", #@ "dense" / "sparse"
     "doc_path": "path/to/data.jsonl", 
     # "idx_path": "path/to/saved/dir",
     "device": "cuda",

@@ -5,7 +5,7 @@
  This file is part of a project licensed under the MIT License.
  See the LICENSE file in the project root for more information.
  
- last modified in 2506060435
+ last modified in 2507221631
 """
 
 
@@ -19,6 +19,8 @@ import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 import re
 import json
+from collections import Counter
+import math
 
 from .dataType import DocChunk, lookupQuery
 from .templates import prompt_tem, query_tem, lm_tem
@@ -26,7 +28,8 @@ from .templates import prompt_tem, query_tem, lm_tem
 class RAGFramework:
     def __init__(self, 
         lm_model_name: str = "gemma-3-4b-it", 
-        emb_model_name: str = "all-MiniLM-L6-v2",
+        emb_model_name: str = "all-MiniLM-L6-v2", 
+        mode: str = "dense ", #@ "dense" / "sparse"
         device="cuda", 
     ):
         self.device = device
@@ -39,8 +42,10 @@ class RAGFramework:
             # trust_remote_code=True
         ).to(self.device)
 
+        self.mode = mode
         self.index = None
         self.documents = []
+        self.bm25 = BM25()
 
     def preprocess_text2chunk(self, 
         text: str
@@ -67,16 +72,21 @@ class RAGFramework:
                     all_chunks += [doc]
                     idx += 1
         
-        # Generate embedding vectors
         contents = [doc.content for doc in all_chunks]
-        embeddings = self.embedding_model.encode(contents)
-        self.index = faiss.IndexFlatIP(embeddings.shape[1]) # Create FAISS index
-        faiss.normalize_L2(embeddings)
-        self.index.add(embeddings.astype(np.float32))
-        
-        # Save documents
-        for doc, embedding in zip(all_chunks, embeddings):
-            doc.embedding = embedding
+
+        if self.mode == "dense":
+            embeddings = self.embedding_model.encode(contents)
+            self.index = faiss.IndexFlatIP(embeddings.shape[1]) # Create FAISS index
+            faiss.normalize_L2(embeddings)
+            self.index.add(embeddings.astype(np.float32))
+            
+            # Save documents
+            for doc, embedding in zip(all_chunks, embeddings):
+                doc.embedding = embedding
+
+        elif self.mode == "sparse":
+            self.bm25.fit(contents)
+
         self.chunk_list = all_chunks
         print(f"Successfully loaded {len(self.chunk_list)} document chunks")
     
@@ -84,19 +94,32 @@ class RAGFramework:
         search_query: str, 
         top_k: int = 3
     ) -> List[DocChunk]:
-        query_embedding = self.embedding_model.encode([search_query])
-        faiss.normalize_L2(query_embedding)
-        
-        scores, indices = self.index.search(query_embedding.astype(np.float32), top_k)
-        
-        relevant_docs = []
-        for score, idx in zip(scores[0], indices[0]):
-            if idx < len(self.chunk_list):
-                doc = self.chunk_list[idx]
-                relevant_docs.append(doc)
-        
+        if self.mode == "dense":
+            query_embedding = self.embedding_model.encode([search_query])
+            faiss.normalize_L2(query_embedding)
+            
+            scores, indices = self.index.search(query_embedding.astype(np.float32), top_k)
+            
+            relevant_docs = []
+            for score, idx in zip(scores[0], indices[0]):
+                if idx < len(self.chunk_list):
+                    doc = self.chunk_list[idx]
+                    relevant_docs.append(doc)
+
+        elif self.mode == "sparse":
+
+            results = self.bm25.search(search_query, top_k)
+
+            relevant_docs = []
+            for score, idx in results:
+                if idx < len(self.chunk_list):
+                    doc = self.chunk_list[idx]
+                    # Store the BM25 score in the document object for potential use
+                    doc.score = score
+                    relevant_docs.append(doc)
+
         return relevant_docs
-    
+
     def generate(self, 
         query: lookupQuery, 
         top_k: int = 3, 
@@ -165,7 +188,7 @@ class RAGFramework:
         save_path: str
     ):
         os.makedirs(save_path, exist_ok=True)
-        faiss.write_index(self.index, os.path.join(save_path, "index.faiss"))
+        faiss.write_index(self.index, os.path.join(save_path, f"{self.mode}_index.faiss"))
         
         docs_data = []
         for doc in self.chunk_list:
@@ -175,7 +198,7 @@ class RAGFramework:
                 'content': doc.content,
             })
         
-        with open(os.path.join(save_path, "documents.json"), 'w', encoding='utf-8') as f:
+        with open(os.path.join(save_path, f"{self.mode}_documents.json"), 'w', encoding='utf-8') as f:
             json.dump(docs_data, f, ensure_ascii=False, indent=2)
         print(f"Save index to {save_path}")
     
@@ -184,7 +207,7 @@ class RAGFramework:
     ):
         self.index = faiss.read_index(os.path.join(load_path, "index.faiss"))
         
-        with open(os.path.join(load_path, "documents.json"), 'r', encoding='utf-8') as f:
+        with open(os.path.join(load_path, "{self.mode}_documents.json"), 'r', encoding='utf-8') as f:
             docs_data = json.load(f)
         
         self.chunk_list = []
@@ -205,6 +228,7 @@ class RAGFramework:
         rag = cls(
             lm_model_name=cfg.get("lm_model_name", "gemma-3-4b-it"),
             emb_model_name=cfg.get("emb_model_name", "all-MiniLM-L6-v2"),
+            mode=cfg.get("mode", "dense"),  # "dense" or "sparse"
             device=cfg.get("device", "cuda"),
         )
 
@@ -220,6 +244,72 @@ class RAGFramework:
 
         return rag
 
+class BM25:
+    def __init__(self, k1=1.5, b=0.75):
+        self.k1 = k1
+        self.b = b
+        self.corpus = []
+        self.doc_freqs = []
+        self.idf = {}
+        self.doc_len = []
+        self.avgdl = 0
+        
+    def tokenize(self, text):
+        """Simple tokenization - split on whitespace and punctuation"""
+        text = text.lower()
+        tokens = re.findall(r'\b\w+\b', text)
+        return tokens
+    
+    def fit(self, corpus):
+        """Build BM25 index from corpus"""
+        self.corpus = corpus
+        self.doc_len = []
+        self.doc_freqs = []
+        
+        # Tokenize all documents and compute term frequencies
+        for doc in corpus:
+            tokens = self.tokenize(doc)
+            self.doc_len.append(len(tokens))
+            freq = Counter(tokens)
+            self.doc_freqs.append(freq)
+        
+        # Calculate average document length
+        self.avgdl = sum(self.doc_len) / len(self.doc_len) if self.doc_len else 0
+        
+        # Calculate IDF for each term
+        self.idf = {}
+        all_terms = set()
+        for freq in self.doc_freqs:
+            all_terms.update(freq.keys())
+        
+        for term in all_terms:
+            containing_docs = sum(1 for freq in self.doc_freqs if term in freq)
+            self.idf[term] = math.log((len(corpus) - containing_docs + 0.5) / (containing_docs + 0.5) + 1.0)
+    
+    def search(self, query, top_k=10):
+        """Search for most relevant documents"""
+        query_tokens = self.tokenize(query)
+        scores = []
+        
+        for i, doc_freq in enumerate(self.doc_freqs):
+            score = 0
+            doc_len = self.doc_len[i]
+            
+            for token in query_tokens:
+                if token in doc_freq:
+                    tf = doc_freq[token]
+                    idf = self.idf.get(token, 0)
+                    
+                    # BM25 formula
+                    numerator = tf * (self.k1 + 1)
+                    denominator = tf + self.k1 * (1 - self.b + self.b * (doc_len / self.avgdl))
+                    score += idf * (numerator / denominator)
+            
+            scores.append((score, i))
+        
+        # Sort by score (descending) and return top_k indices
+        scores.sort(key=lambda x: x[0], reverse=True)
+        return [(score, idx) for score, idx in scores[:top_k]]
 
 
 

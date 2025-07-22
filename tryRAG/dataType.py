@@ -18,6 +18,7 @@ class DocChunk:
     url: str
     content: str
     embedding: np.ndarray = None
+    score = None
 
 @dataclass
 class lookupQuery:
