@@ -215,7 +215,7 @@ class RAGFramework:
 
         if "idx_path" in cfg:
             idx_path = cfg["idx_path"]
-            rag.load_index(doc_path)
+            rag.load_index(idx_path)
         print("RAGFramework initialized\n")
 
         return rag
