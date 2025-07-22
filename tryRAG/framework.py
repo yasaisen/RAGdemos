@@ -33,7 +33,8 @@ class RAGFramework:
         device="cuda", 
     ):
         self.device = device
-        self.embedding_model = SentenceTransformer(emb_model_name)
+        if self.mode == "dense":
+            self.embedding_model = SentenceTransformer(emb_model_name)
         self.tokenizer = AutoTokenizer.from_pretrained(lm_model_name)
         self.model = AutoModelForCausalLM.from_pretrained(
             lm_model_name,
