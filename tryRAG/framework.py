@@ -33,6 +33,8 @@ class RAGFramework:
         device="cuda", 
     ):
         self.device = device
+        self.mode = mode
+        
         if self.mode == "dense":
             self.embedding_model = SentenceTransformer(emb_model_name)
         self.tokenizer = AutoTokenizer.from_pretrained(lm_model_name)
@@ -43,7 +45,6 @@ class RAGFramework:
             # trust_remote_code=True
         ).to(self.device)
 
-        self.mode = mode
         self.index = None
         self.documents = []
         self.bm25 = BM25()
@@ -189,26 +190,61 @@ class RAGFramework:
         save_path: str
     ):
         os.makedirs(save_path, exist_ok=True)
-        faiss.write_index(self.index, os.path.join(save_path, f"{self.mode}_index.faiss"))
         
+        if self.mode == "dense":
+            # Save FAISS index
+            faiss.write_index(self.index, os.path.join(save_path, f"{self.mode}_index.faiss"))
+        elif self.mode == "sparse":
+            # Save BM25 index
+            bm25_data = {
+                'k1': self.bm25.k1,
+                'b': self.bm25.b,
+                'doc_freqs': self.bm25.doc_freqs,
+                'idf': self.bm25.idf,
+                'doc_len': self.bm25.doc_len,
+                'avgdl': self.bm25.avgdl,
+                'corpus': self.bm25.corpus
+            }
+            with open(os.path.join(save_path, f"{self.mode}_index.json"), 'wb') as f:
+                json.dump(bm25_data, f)
+        
+        # Save documents data
         docs_data = []
         for doc in self.chunk_list:
-            docs_data.append({
+            doc_dict = {
                 'idx': doc.idx,
                 'url': doc.url,
                 'content': doc.content,
-            })
+            }
+            # Save embedding for dense mode
+            if self.mode == "dense" and hasattr(doc, 'embedding'):
+                doc_dict['embedding'] = doc.embedding.tolist()
+            docs_data.append(doc_dict)
         
         with open(os.path.join(save_path, f"{self.mode}_documents.json"), 'w', encoding='utf-8') as f:
             json.dump(docs_data, f, ensure_ascii=False, indent=2)
-        print(f"Save index to {save_path}")
+        print(f"Saved {self.mode} index to {save_path}")
     
     def load_index(self, 
         load_path: str
     ):
-        self.index = faiss.read_index(os.path.join(load_path, "index.faiss"))
+        if self.mode == "dense":
+            # Load FAISS index
+            self.index = faiss.read_index(os.path.join(load_path, f"{self.mode}_index.faiss"))
+        elif self.mode == "sparse":
+            # Load BM25 index
+            with open(os.path.join(load_path, f"{self.mode}_index.json"), 'rb') as f:
+                bm25_data = json.load(f)
+            
+            self.bm25 = BM25(k1=bm25_data['k1'], b=bm25_data['b'])
+            self.bm25.doc_freqs = bm25_data['doc_freqs']
+            self.bm25.idf = bm25_data['idf']
+            self.bm25.doc_len = bm25_data['doc_len']
+            self.bm25.avgdl = bm25_data['avgdl']
+            self.bm25.corpus = bm25_data['corpus']
         
-        with open(os.path.join(load_path, "{self.mode}_documents.json"), 'r', encoding='utf-8') as f:
+        # Load documents
+        with open(os.path.join(load_path, f"{self.mode}_documents.json"), 'r', encoding='utf-8') as f:
             docs_data = json.load(f)
         
         self.chunk_list = []
@@ -218,9 +254,12 @@ class RAGFramework:
                 url=doc_data['url'],
                 content=doc_data['content'],
             )
+            # Restore embedding for dense mode
+            if self.mode == "dense" and 'embedding' in doc_data:
+                doc.embedding = np.array(doc_data['embedding'])
             self.chunk_list.append(doc)
         
-        print(f"Load from {load_path}")
+        print(f"Loaded {self.mode} index from {load_path}")
 
     @classmethod
     def from_config(cls, 
