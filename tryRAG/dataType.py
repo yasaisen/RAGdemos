@@ -17,8 +17,10 @@ class DocChunk:
     idx: int
     url: str
     content: str
+    upper_text: str = None
     embedding: np.ndarray = None
     score = None
+    token_len: int = 0
 
 @dataclass
 class lookupQuery:

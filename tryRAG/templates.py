@@ -5,7 +5,7 @@
  This file is part of a project licensed under the MIT License.
  See the LICENSE file in the project root for more information.
  
- last modified in 2506060435
+ last modified in 2507231725
 """
 
 
@@ -18,7 +18,16 @@ References:
 {context}
 Question:
 {query.question}
-Do not use markdown syntax to answer.
+Do not use markdown syntax to answer and put the answer after "Answer:"
+"""
+
+def preans_tem(
+    question, 
+):
+    return f"""
+Question:
+{question}
+Do not use markdown syntax to answer and put the answer after "Answer:"
 """
 
 def query_tem(
